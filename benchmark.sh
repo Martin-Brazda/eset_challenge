@@ -6,18 +6,25 @@
 NEEDLE="FIND_ME_NOW"
 TARGET="bench_data"
 GEN_SCRIPT="/tmp/gen_script.py"
+DATA_SIZE=${1:-250}  # default 250MB
+
+case "$DATA_SIZE" in
+    (small) NUM_SMALL=50; NUM_LARGE=2; LARGE_MB=10;;
+    (medium) NUM_SMALL=100; NUM_LARGE=5; LARGE_MB=50;;
+    (large) NUM_SMALL=200; NUM_LARGE=10; LARGE_MB=200;;
+esac
 
 echo "===================================================="
-echo "   ESET CHALLENGE PERFORMANCE BENCHMARK"
+echo "              PERFORMANCE BENCHMARK"
 echo "===================================================="
 
 if [ ! -d "$TARGET" ]; then
-    echo "[!] Benchmarking data missing. Generating ~250MB test set..."
+    echo "[!] Benchmarking data missing. Generating ~${DATA_SIZE}MB test set..."
     cat << 'EOF' > "$GEN_SCRIPT"
 import os, random, string
 def generate_garbage(size):
     return ''.join(random.choices(string.ascii_letters + string.digits + " \n\t", k=size)).encode()
-def create_bench_data(base_path, num_small=100, num_large=5, large_size_mb=50):
+def create_bench_data(base_path, num_small=100, num_large=5, large_size_mb=int($DATA_SIZE/5)):
     if not os.path.exists(base_path): os.makedirs(base_path)
     needle = b"FIND_ME_NOW"
     for i in range(num_small):
@@ -41,6 +48,8 @@ EOF
     echo "[+] Data generation complete."
 fi
 
+
+
 echo "[*] Compiling application..."
 make > /dev/null
 
@@ -48,18 +57,80 @@ echo "----------------------------------------------------"
 printf "%-12s | %-12s | %-10s\n" "Threads" "Buffer" "Time"
 echo "----------------------------------------------------"
 
-for threads in 1 2 4 8 12; do
-    for buf in 4096 65536 1048576; do
+LOW_TIME=0.0
+OPTIMAL_THREADS=1
+OPTIMAL_BUFFER=4096
+
+thread_range=$(seq 2 2 $(nproc))
+buffer_range=(4096 8192 16384 32768 65536 131072 262144 524288 1048576)
+
+for threads in $thread_range; do
+    for buf in "${buffer_range[@]}"; do
         sed -i "s/NUM_THREADS=.*/NUM_THREADS=$threads/" .env
         sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$buf/" .env
         
         printf "%-12d | %-12s | " "$threads" "$(($buf/1024))KB"
         
-        { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 | grep real | awk '{print $2}'
+        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 | grep real | awk -F'm|s' '{print $1*60 + $2}' )
+        
+        if (( $(echo "$LOW_TIME == 0" | bc -l) )); then
+            LOW_TIME=$TIME
+        else
+            if (( $(echo "$TIME < $LOW_TIME" | bc -l) )); then
+                LOW_TIME=$TIME
+                OPTIMAL_THREADS=$threads
+                OPTIMAL_BUFFER=$buf
+            fi
+        fi
+        printf "%s\n" "$TIME"
     done
     echo "----------------------------------------------------"
 done
 
-sed -i "s/NUM_THREADS=.*/NUM_THREADS=8/" .env
-sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=65536/" .env
+echo "[*] Starting adaptive fine sweep around best results..."
+
+# best-1 to best+1, bounded by 1 and nproc
+thread_fine_range=()
+for t in $((OPTIMAL_THREADS-1)) $OPTIMAL_THREADS $((OPTIMAL_THREADS+1)); do
+    if [ $t -ge 1 ] && [ $t -le $(nproc) ]; then
+        thread_fine_range+=($t)
+    fi
+done
+
+buffer_fine_range=()
+for expr in "$OPTIMAL_BUFFER / 2" "$OPTIMAL_BUFFER" "$OPTIMAL_BUFFER * 2"; do
+    b=$(echo "$expr" | bc)
+    if [ $b -ge 4096 ] && [ $b -le 1048576 ]; then
+        buffer_fine_range+=($b)
+    fi
+done
+
+for threads in "${thread_fine_range[@]}"; do
+    for buf in "${buffer_fine_range[@]}"; do
+        sed -i "s/NUM_THREADS=.*/NUM_THREADS=$threads/" .env
+        sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$buf/" .env
+
+        printf "%-12d | %-12s | " "$threads" "$(($buf/1024))KB"
+
+        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 | grep real | awk -F'm|s' '{print $1*60 + $2}' )
+
+        if (( $(echo "$TIME < $LOW_TIME" | bc -l) )); then
+            LOW_TIME=$TIME
+            OPTIMAL_THREADS=$threads
+            OPTIMAL_BUFFER=$buf
+        fi
+
+        printf "%s\n" "$TIME"
+    done
+done
+
+echo "[+] Adaptive sweep complete."
+
+printf "Best time: %s\n" "$LOW_TIME"
+printf "Optimal threads: %d\n" "$OPTIMAL_THREADS"
+printf "Optimal buffer: %dKB\n" "$(($OPTIMAL_BUFFER/1024))"
+
+sed -i "s/NUM_THREADS=.*/NUM_THREADS=$OPTIMAL_THREADS/" .env
+sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$OPTIMAL_BUFFER/" .env
 echo "[+] Done. Best results usually occur with Threads matching CPU cores and 64KB-1MB buffers."
+echo "[+] Dont set thread count too high for small dirs since it adds overhead."

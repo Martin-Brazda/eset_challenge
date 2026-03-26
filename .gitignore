@@ -2,3 +2,4 @@
 main
 .env
 bench_data/
+.vscode/

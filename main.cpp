@@ -3,6 +3,7 @@
 #include "include/DirectoryWalker.h"
 #include "include/ThreadPool.h"
 #include "include/Config.h"
+#include "include/Proggress.h"
 #include <iostream>
 #include <cstring>
 #include <filesystem>
@@ -38,9 +39,17 @@ int main(int argc, char* argv[]) {
     FileSearcher searcher(engine, config);
     DirectoryWalker walker(searcher, pool);
 
+    /*
+    CLI UI improvement. Decreases performance.
+
+    ProgressAnimation progress;
+    progress.start("Searching for '" + needle + "' in '" + path_str + "' ");
+    */
+
     try {
         walker.walk(path_str);
         pool.stop();
+        //progress.stop();
 
         if (walker.get_matches() > 0) {
             return 0;
