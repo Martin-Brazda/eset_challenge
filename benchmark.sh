@@ -24,7 +24,7 @@ if [ ! -d "$TARGET" ]; then
 import os, random, string
 def generate_garbage(size):
     return ''.join(random.choices(string.ascii_letters + string.digits + " \n\t", k=size)).encode()
-def create_bench_data(base_path, num_small=100, num_large=5, large_size_mb=int($DATA_SIZE/5)):
+def create_bench_data(base_path, num_small=100, num_large=5, large_size_mb=128):
     if not os.path.exists(base_path): os.makedirs(base_path)
     needle = b"FIND_ME_NOW"
     for i in range(num_small):

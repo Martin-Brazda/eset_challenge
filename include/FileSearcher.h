@@ -35,6 +35,9 @@ public:
     const std::string& getNeedle() const { return engine_.getNeedle(); }
     
 private:
+    SearchResult searchSmallFile(const std::string& filepath) const;
+    SearchResult searchMmapChunked(int fd, size_t file_size, const std::string& filepath) const;
+
     const SearchEngine& engine_;
     const Config& config_;
 };
