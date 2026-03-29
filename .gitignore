@@ -3,3 +3,4 @@ main
 .env
 bench_data/
 .vscode/
+test.py
