@@ -52,6 +52,7 @@ int main(int argc, char* argv[]) {
 
     try {
         walker.walk(path_str);
+        walker.flush_batch();
         pool.stop();
         //progress.stop();
 

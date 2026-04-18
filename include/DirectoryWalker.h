@@ -5,6 +5,11 @@
 #include <mutex>
 #include <atomic>
 
+struct FileInfo {
+    std::string filepath;
+    size_t size;
+};
+
 /**
  * @brief Traverses directory trees and submits files to the ThreadPool.
  */
@@ -24,15 +29,21 @@ public:
      */
     bool walk(const std::string& startPath) const;
     
+    /** @brief Flushes the batch buffer to the ThreadPool. */
+    void flush_batch() const;
+
     /** @brief Returns total number of matches found across all files. */
     int get_matches() const { return matches_; }
     
 private:
     void escape_needle(std::string& str) const;
     void report_results(const std::vector<SearchResult>& results, const std::string& filepath) const;
-    
+    void handle_file(const std::string& filepath, size_t file_size) const;
+
     const FileSearcher& fileSearcher_;
     ThreadPool& pool_;
     mutable std::mutex cout_mtx_;
     mutable std::atomic<int> matches_{0};
+    mutable std::mutex batch_mtx_;
+    mutable std::vector<FileInfo> batch_buffer_;
 };

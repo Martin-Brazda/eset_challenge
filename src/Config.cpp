@@ -100,8 +100,6 @@ void Config::load_env(const std::string& filepath) {
                 std::cerr << "Out of range: " << e.what() << std::endl;
                 return;
             }
-        } else if (key == "BUFFER_SIZE") {
-            buffer_size = parse_size(value);
         } else if (key == "BATCH_SIZE") {
             try {
                 batch_size = std::stoi(value);
