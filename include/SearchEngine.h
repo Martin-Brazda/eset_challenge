@@ -21,9 +21,10 @@ public:
      * @brief Searches a memory buffer for the needle.
      * @param buffer Pointer to the contiguous memory to search.
      * @param size Size of the buffer in bytes.
-     * @return Zero-based byte offset of the match, or -1 if not found.
+     * @param start First index to consider (for repeated scans).
+     * @return Offset of the match relative to @p buffer, or -1 if not found.
      */
-    long searchBuffer(const char* buffer, size_t size) const;
+    long searchBuffer(const char* buffer, size_t size, size_t start = 0) const;
     
     const std::string& getNeedle() const { return needle_; }
 

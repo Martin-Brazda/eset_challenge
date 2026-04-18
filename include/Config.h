@@ -10,8 +10,11 @@ struct Config {
     size_t buffer_size = 8192;
     size_t batch_size = 100;
     bool logging_enabled = false;
-    std::string logging_level = "INFO";
-    std::string logging_output = "STDOUT";
+    bool multifind = true;
+    /// Files this size or smaller use the single-read path (see FileSearcher).
+    size_t small_file_threshold = 64 * 1024;
+    /// Max bytes per mmap window when scanning larger files.
+    size_t chunking_threshold = 64 * 1024 * 1024;
 
     void load_env(const std::string& filepath);
 };

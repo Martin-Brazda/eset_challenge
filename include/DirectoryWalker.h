@@ -29,6 +29,7 @@ public:
     
 private:
     void escape_needle(std::string& str) const;
+    void report_results(const std::vector<SearchResult>& results, const std::string& filepath) const;
     
     const FileSearcher& fileSearcher_;
     ThreadPool& pool_;

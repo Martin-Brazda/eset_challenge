@@ -57,7 +57,7 @@ echo "----------------------------------------------------"
 printf "%-12s | %-12s | %-10s\n" "Threads" "Buffer" "Time"
 echo "----------------------------------------------------"
 
-LOW_TIME=0.0
+LOW_TIME=0
 OPTIMAL_THREADS=1
 OPTIMAL_BUFFER=4096
 
@@ -71,18 +71,18 @@ for threads in $thread_range; do
         
         printf "%-12d | %-12s | " "$threads" "$(($buf/1024))KB"
         
-        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 | grep real | awk -F'm|s' '{print $1*60 + $2}' )
+        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 \
+            | grep real | sed -E 's/.*[[:space:]]([0-9]+)m([0-9.]+)s/\1 \2/' \
+            | awk '{ printf "%.0f\n", ($1*60+$2)*1000000 }' )
         
-        if (( $(echo "$LOW_TIME == 0" | bc -l) )); then
+        if [ "$LOW_TIME" -eq 0 ]; then
             LOW_TIME=$TIME
-        else
-            if (( $(echo "$TIME < $LOW_TIME" | bc -l) )); then
-                LOW_TIME=$TIME
-                OPTIMAL_THREADS=$threads
-                OPTIMAL_BUFFER=$buf
-            fi
+        elif [ "$TIME" -lt "$LOW_TIME" ]; then
+            LOW_TIME=$TIME
+            OPTIMAL_THREADS=$threads
+            OPTIMAL_BUFFER=$buf
         fi
-        printf "%s\n" "$TIME"
+        printf "%ss\n" "$(awk -v us="$TIME" 'BEGIN{ printf "%.3f", us/1000000 }')"
     done
     echo "----------------------------------------------------"
 done
@@ -98,9 +98,8 @@ for t in $((OPTIMAL_THREADS-1)) $OPTIMAL_THREADS $((OPTIMAL_THREADS+1)); do
 done
 
 buffer_fine_range=()
-for expr in "$OPTIMAL_BUFFER / 2" "$OPTIMAL_BUFFER" "$OPTIMAL_BUFFER * 2"; do
-    b=$(echo "$expr" | bc)
-    if [ $b -ge 4096 ] && [ $b -le 1048576 ]; then
+for b in $((OPTIMAL_BUFFER / 2)) "$OPTIMAL_BUFFER" $((OPTIMAL_BUFFER * 2)); do
+    if [ "$b" -ge 4096 ] && [ "$b" -le 1048576 ]; then
         buffer_fine_range+=($b)
     fi
 done
@@ -112,25 +111,27 @@ for threads in "${thread_fine_range[@]}"; do
 
         printf "%-12d | %-12s | " "$threads" "$(($buf/1024))KB"
 
-        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 | grep real | awk -F'm|s' '{print $1*60 + $2}' )
+        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 \
+            | grep real | sed -E 's/.*[[:space:]]([0-9]+)m([0-9.]+)s/\1 \2/' \
+            | awk '{ printf "%.0f\n", ($1*60+$2)*1000000 }' )
 
-        if (( $(echo "$TIME < $LOW_TIME" | bc -l) )); then
+        if [ "$TIME" -lt "$LOW_TIME" ]; then
             LOW_TIME=$TIME
             OPTIMAL_THREADS=$threads
             OPTIMAL_BUFFER=$buf
         fi
 
-        printf "%s\n" "$TIME"
+        printf "%ss\n" "$(awk -v us="$TIME" 'BEGIN{ printf "%.3f", us/1000000 }')"
     done
 done
 
 echo "[+] Adaptive sweep complete."
 
-printf "Best time: %s\n" "$LOW_TIME"
+printf "Best time: %ss\n" "$(awk -v us="$LOW_TIME" 'BEGIN{ printf "%.6f", us/1000000 }')"
 printf "Optimal threads: %d\n" "$OPTIMAL_THREADS"
 printf "Optimal buffer: %dKB\n" "$(($OPTIMAL_BUFFER/1024))"
 
 sed -i "s/NUM_THREADS=.*/NUM_THREADS=$OPTIMAL_THREADS/" .env
 sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$OPTIMAL_BUFFER/" .env
 echo "[+] Done. Best results usually occur with Threads matching CPU cores and 64KB-1MB buffers."
-echo "[+] Dont set thread count too high for small dirs since it adds overhead."
+echo "[+] Don't set thread count too high for small dirs since it adds overhead."

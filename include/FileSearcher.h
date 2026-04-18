@@ -2,6 +2,7 @@
 #include "SearchEngine.h"
 #include "Config.h"
 #include <string>
+#include <vector>
 
 /**
  * @brief Represents a successful search result.
@@ -14,29 +15,40 @@ struct SearchResult {
 
 /**
  * @brief Handles file-level streaming and buffered searching.
- * 
+ *
  * Reads files in chunks to minimize memory usage while ensuring
  * that needles spanning across buffer boundaries are correctly identified.
+ *
+ * If built with -DMULTIFIND, every non-overlapping occurrence is reported.
+ * (advance by needle size after each hit). Otherwise only the first hit per file.
  */
 class FileSearcher {
 public:
-    /**
-     * @brief Constructs a FileSearcher with a search engine and configuration.
-     */
     explicit FileSearcher(const SearchEngine& engine, const Config& config);
-    
+
     /**
-     * @brief Performs a buffered search on a specific file.
-     * @param filepath Absolute or relative path to the file.
-     * @return A SearchResult object. offset is -1 if not found.
+     * @return All matches in the file (empty if none). Without MULTIFIND, at most one element.
      */
-    SearchResult search(const std::string& filepath) const;
-    
+    /**
+     * @brief Searches a specific range of a file.
+     * @param fd Open file descriptor.
+     * @param file_size Total size of the file.
+     * @param start Byte offset to start searching from.
+     * @param len Number of bytes to search in this task.
+     * @param overlap Number of bytes to overlap with the next chunk.
+     */
+    std::vector<SearchResult> searchRange(int fd, size_t file_size, size_t start, size_t len, size_t overlap) const;
+
     const std::string& getNeedle() const { return engine_.getNeedle(); }
-    
+    bool logging_enabled() const { return config_.logging_enabled; }
+    const Config& getConfig() const { return config_; }
+
+    /**
+     * @brief Searches a small file by reading it entirely into memory.
+     */
+    std::vector<SearchResult> searchSmallFile(int fd, size_t file_size, const std::string& filepath) const;
+
 private:
-    SearchResult searchSmallFile(const std::string& filepath) const;
-    SearchResult searchMmapChunked(int fd, size_t file_size, const std::string& filepath) const;
 
     const SearchEngine& engine_;
     const Config& config_;

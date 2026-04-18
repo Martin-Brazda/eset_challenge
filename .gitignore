@@ -4,3 +4,5 @@ main
 bench_data/
 .vscode/
 test.py
+tests/
+obj/

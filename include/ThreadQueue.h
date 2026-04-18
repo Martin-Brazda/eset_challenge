@@ -18,7 +18,10 @@ public:
     void push(T item) {
         std::unique_lock<std::mutex> lock(mutex_);
         if (max_size_ > 0) {
-            cv_push_.wait(lock, [this]() { return queue_.size() < max_size_; });
+            cv_push_.wait(lock, [this]() { return queue_.size() < max_size_ || done_; });
+        }
+        if (done_) {
+            return;
         }
         queue_.push(std::move(item));
         cv_pop_.notify_one();
@@ -46,6 +49,7 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         done_ = true;
         cv_pop_.notify_all();
+        cv_push_.notify_all();
     }
 
 private:

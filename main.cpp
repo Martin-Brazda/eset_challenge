@@ -1,9 +1,9 @@
-#include "include/SearchEngine.h"
-#include "include/FileSearcher.h"
-#include "include/DirectoryWalker.h"
-#include "include/ThreadPool.h"
-#include "include/Config.h"
-#include "include/Proggress.h"
+#include <SearchEngine.h>
+#include <FileSearcher.h>
+#include <DirectoryWalker.h>
+#include <ThreadPool.h>
+#include <Config.h>
+#include <Progress.h>
 #include <iostream>
 #include <cstring>
 #include <filesystem>
@@ -14,13 +14,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (std::filesystem::exists(argv[1]) == 0) {
+    if (!std::filesystem::exists(argv[1])) {
         std::cerr << "Path does not exist\n";
         return 1;
     }
 
     if (strlen(argv[2]) > 128) {
         std::cerr << "String is too long (max 128 chars)\n";
+        return 1;
+    }
+    if (strlen(argv[2]) == 0) {
+        std::cerr << "String is empty\n";
         return 1;
     }
 
