@@ -32,12 +32,9 @@ $(OBJ_DIR)/main.o: main.cpp | $(OBJ_DIR)
 clean:
 	rm -rf $(OBJ_DIR) $(TARGET)
 
-test: $(TARGET)
-	bash tests/run_tests.sh
-
 run:
 	./$(TARGET) $${ARGS}
 
 -include $(DEPS)
 
-.PHONY: all clean test run
+.PHONY: all clean run

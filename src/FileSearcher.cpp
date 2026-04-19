@@ -51,9 +51,7 @@ std::vector<SearchResult> FileSearcher::searchSmallFile(int fd, size_t file_size
 
     std::vector<char> buffer(file_size);
     if (!read_full_pread(fd, buffer.data(), file_size, 0)) {
-        if (config_.logging_enabled) {
-            std::cerr << "Error reading file: " << filepath << std::endl;
-        }
+        std::cerr << "Error reading file '" << filepath << "': " << std::strerror(errno) << std::endl;
         return out;
     }
 
@@ -74,7 +72,8 @@ std::vector<SearchResult> FileSearcher::searchSmallFile(int fd, size_t file_size
     return out;
 }
 
-std::vector<SearchResult> FileSearcher::searchRange(int fd, size_t file_size, size_t start, size_t len, size_t overlap) const {
+std::vector<SearchResult> FileSearcher::searchRange(int fd, size_t file_size, size_t start, size_t len, size_t overlap,
+                                                    const std::string& filepath) const {
     std::vector<SearchResult> out;
     if (fd == -1 || len == 0 || start >= file_size) return out;
 
@@ -88,7 +87,11 @@ std::vector<SearchResult> FileSearcher::searchRange(int fd, size_t file_size, si
     if (map_size == 0) return out;
 
     char* mapped_addr = static_cast<char*>(mmap(NULL, map_size, PROT_READ, MAP_PRIVATE, fd, static_cast<off_t>(aligned_offset)));
-    if (mapped_addr == MAP_FAILED) return out;
+    if (mapped_addr == MAP_FAILED) {
+        std::cerr << "Error mmap file '" << filepath << "' at offset " << aligned_offset
+                  << ": " << std::strerror(errno) << std::endl;
+        return out;
+    }
 
     char* search_start = mapped_addr + map_offset_diff;
     const size_t search_len = std::min(len + overlap, file_size - start);

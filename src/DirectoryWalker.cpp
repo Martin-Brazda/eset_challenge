@@ -3,6 +3,10 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <cerrno>
+#include <cstring>
+#include <cctype>
+#include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -69,11 +73,23 @@ bool DirectoryWalker::walk(const std::string& startPath) const {
     std::error_code ec; 
     
     if (fs::is_regular_file(path, ec)) {
+        if (ec) {
+            std::cerr << "Error checking file '" << path.string() << "': " << ec.message() << std::endl;
+            return false;
+        }
         size_t size = fs::file_size(path, ec);
-        if (!ec && size > 0) handle_file(path.string(), size);
+        if (ec) {
+            std::cerr << "Error reading size for '" << path.string() << "': " << ec.message() << std::endl;
+            return false;
+        }
+        if (size > 0) handle_file(path.string(), size);
     }
     
     if (fs::is_directory(path, ec)) {
+        if (ec) {
+            std::cerr << "Error checking directory '" << path.string() << "': " << ec.message() << std::endl;
+            return false;
+        }
         try {
             for (const auto& entry : fs::directory_iterator(path, fs::directory_options::skip_permission_denied)) {
                 if (fs::is_symlink(entry.symlink_status())) continue;
@@ -81,12 +97,22 @@ bool DirectoryWalker::walk(const std::string& startPath) const {
                 std::error_code size_ec;
                 if (entry.is_regular_file(size_ec)) {
                     size_t size = entry.file_size(size_ec);
-                    if (!size_ec && size > 0) handle_file(entry.path().string(), size);
+                    if (size_ec) {
+                        std::cerr << "Error reading size for '" << entry.path().string() << "': "
+                                  << size_ec.message() << std::endl;
+                        continue;
+                    }
+                    if (size > 0) handle_file(entry.path().string(), size);
                 } else if (entry.is_directory(size_ec)) {
                     walk(entry.path().string());
+                } else if (size_ec) {
+                    std::cerr << "Error inspecting '" << entry.path().string() << "': "
+                              << size_ec.message() << std::endl;
                 }
             }
-        } catch (const std::exception&) {}
+        } catch (const std::exception& ex) {
+            std::cerr << "Error traversing '" << path.string() << "': " << ex.what() << std::endl;
+        }
     }
     
     return false;
@@ -98,7 +124,10 @@ void DirectoryWalker::handle_file(const std::string& filepath, size_t file_size)
     if (file_size > config.small_file_threshold) {
         // Large file: Now we open it because we need the FD for parallel chunking
         int fd = open(filepath.c_str(), O_RDONLY);
-        if (fd == -1) return;
+        if (fd == -1) {
+            std::cerr << "Error opening file '" << filepath << "': " << std::strerror(errno) << std::endl;
+            return;
+        }
 
         auto fd_ptr = std::make_shared<FileDescriptor>(fd);
         const size_t chunk_size = config.chunking_threshold;
@@ -108,7 +137,7 @@ void DirectoryWalker::handle_file(const std::string& filepath, size_t file_size)
             size_t len = std::min(chunk_size, file_size - start);
             size_t current_overlap = (start + len < file_size) ? overlap : 0;
             pool_.submit([this, fd_ptr, file_size, start, len, current_overlap, filepath]() {
-                report_results(fileSearcher_.searchRange(fd_ptr->fd, file_size, start, len, current_overlap), filepath);
+                report_results(fileSearcher_.searchRange(fd_ptr->fd, file_size, start, len, current_overlap, filepath), filepath);
             });
         }
     } else {
@@ -138,7 +167,10 @@ void DirectoryWalker::flush_batch() const {
     pool_.submit([this, batch]() {
         for (const auto& file : batch) {
             int fd = open(file.filepath.c_str(), O_RDONLY);
-            if (fd == -1) continue;
+            if (fd == -1) {
+                std::cerr << "Error opening file '" << file.filepath << "': " << std::strerror(errno) << std::endl;
+                continue;
+            }
             report_results(fileSearcher_.searchSmallFile(fd, file.size, file.filepath), file.filepath);
             close(fd);
         }

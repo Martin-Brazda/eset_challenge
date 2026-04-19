@@ -1,137 +1,148 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# benchmark.sh - Comprehensive performance testing for ESET File Searcher
+set -euo pipefail
 
-# Configuration
+# benchmark.sh - Thread-sweep performance benchmark for file searcher
+
 NEEDLE="FIND_ME_NOW"
 TARGET="bench_data"
-GEN_SCRIPT="/tmp/gen_script.py"
-DATA_SIZE=${1:-250}  # default 250MB
+GEN_SCRIPT="/tmp/eset_bench_gen.py"
+DATA_SIZE="${1:-medium}"
 
 case "$DATA_SIZE" in
-    (small) NUM_SMALL=50; NUM_LARGE=2; LARGE_MB=10;;
-    (medium) NUM_SMALL=100; NUM_LARGE=5; LARGE_MB=50;;
-    (large) NUM_SMALL=200; NUM_LARGE=10; LARGE_MB=200;;
+    small)  NUM_SMALL=50;  NUM_LARGE=2;  LARGE_MB=10 ;;
+    medium) NUM_SMALL=100; NUM_LARGE=5;  LARGE_MB=50 ;;
+    large)  NUM_SMALL=200; NUM_LARGE=10; LARGE_MB=200 ;;
+    *)
+        echo "Usage: $0 [small|medium|large]" >&2
+        exit 1
+        ;;
 esac
+
+if [[ ! -f .env ]]; then
+    cp .env.example .env
+fi
+
+ENV_BACKUP="$(mktemp)"
+cp .env "$ENV_BACKUP"
+cleanup() {
+    cp "$ENV_BACKUP" .env
+    rm -f "$ENV_BACKUP"
+}
+trap cleanup EXIT
 
 echo "===================================================="
 echo "              PERFORMANCE BENCHMARK"
 echo "===================================================="
 
-if [ ! -d "$TARGET" ]; then
-    echo "[!] Benchmarking data missing. Generating ~${DATA_SIZE}MB test set..."
-    cat << 'EOF' > "$GEN_SCRIPT"
-import os, random, string
+if [[ ! -d "$TARGET" ]]; then
+    echo "[!] Benchmark data missing. Generating ${DATA_SIZE} dataset..."
+    cat > "$GEN_SCRIPT" <<'PY'
+import os
+import random
+import string
+import sys
+
 def generate_garbage(size):
-    return ''.join(random.choices(string.ascii_letters + string.digits + " \n\t", k=size)).encode()
-def create_bench_data(base_path, num_small=100, num_large=5, large_size_mb=128):
-    if not os.path.exists(base_path): os.makedirs(base_path)
+    alphabet = string.ascii_letters + string.digits + " \n\t"
+    return "".join(random.choices(alphabet, k=size)).encode()
+
+def create_bench_data(base_path, num_small, num_large, large_size_mb):
+    os.makedirs(base_path, exist_ok=True)
     needle = b"FIND_ME_NOW"
     for i in range(num_small):
         with open(os.path.join(base_path, f"small_{i}.txt"), "wb") as f:
             f.write(generate_garbage(random.randint(100, 10000)))
-            if i == 42: f.write(b"\nContext in front " + needle + b" context after\n")
+            if i == 42:
+                f.write(b"\nContext in front " + needle + b" context after\n")
+
     for i in range(num_large):
-        file_path = os.path.join(base_path, f"large_{i}.bin")
-        with open(file_path, "wb") as f:
-            for _ in range(large_size_mb): f.write(generate_garbage(1024 * 1024))
+        path = os.path.join(base_path, f"large_{i}.bin")
+        with open(path, "wb") as f:
+            for _ in range(large_size_mb):
+                f.write(generate_garbage(1024 * 1024))
             if i == 0:
                 f.seek(random.randint(0, large_size_mb * 1024 * 1024))
                 f.write(b"ABC" + needle + b"XYZ")
+
     nested = os.path.join(base_path, "deep", "nested", "folder")
-    os.makedirs(nested)
-    with open(os.path.join(nested, "hidden.txt"), "wb") as f: f.write(b"Deeply nested " + needle + b" success!")
-if __name__ == "__main__": create_bench_data("bench_data")
-EOF
-    python3 "$GEN_SCRIPT"
-    rm "$GEN_SCRIPT"
+    os.makedirs(nested, exist_ok=True)
+    with open(os.path.join(nested, "hidden.txt"), "wb") as f:
+        f.write(b"Deeply nested " + needle + b" success!")
+
+if __name__ == "__main__":
+    create_bench_data("bench_data", int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]))
+PY
+    python3 "$GEN_SCRIPT" "$NUM_SMALL" "$NUM_LARGE" "$LARGE_MB"
+    rm -f "$GEN_SCRIPT"
     echo "[+] Data generation complete."
 fi
 
-
-
 echo "[*] Compiling application..."
-make > /dev/null
+make >/dev/null
 
-echo "----------------------------------------------------"
-printf "%-12s | %-12s | %-10s\n" "Threads" "Buffer" "Time"
-echo "----------------------------------------------------"
-
-LOW_TIME=0
-OPTIMAL_THREADS=1
-OPTIMAL_BUFFER=4096
-
-thread_range=$(seq 2 2 $(nproc))
-buffer_range=(4096 8192 16384 32768 65536 131072 262144 524288 1048576)
-
-for threads in $thread_range; do
-    for buf in "${buffer_range[@]}"; do
-        sed -i "s/NUM_THREADS=.*/NUM_THREADS=$threads/" .env
-        sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$buf/" .env
-        
-        printf "%-12d | %-12s | " "$threads" "$(($buf/1024))KB"
-        
-        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 \
-            | grep real | sed -E 's/.*[[:space:]]([0-9]+)m([0-9.]+)s/\1 \2/' \
-            | awk '{ printf "%.0f\n", ($1*60+$2)*1000000 }' )
-        
-        if [ "$LOW_TIME" -eq 0 ]; then
-            LOW_TIME=$TIME
-        elif [ "$TIME" -lt "$LOW_TIME" ]; then
-            LOW_TIME=$TIME
-            OPTIMAL_THREADS=$threads
-            OPTIMAL_BUFFER=$buf
-        fi
-        printf "%ss\n" "$(awk -v us="$TIME" 'BEGIN{ printf "%.3f", us/1000000 }')"
-    done
-    echo "----------------------------------------------------"
-done
-
-echo "[*] Starting adaptive fine sweep around best results..."
-
-# best-1 to best+1, bounded by 1 and nproc
-thread_fine_range=()
-for t in $((OPTIMAL_THREADS-1)) $OPTIMAL_THREADS $((OPTIMAL_THREADS+1)); do
-    if [ $t -ge 1 ] && [ $t -le $(nproc) ]; then
-        thread_fine_range+=($t)
+set_env() {
+    local key="$1"
+    local value="$2"
+    if grep -q "^export ${key}=" .env; then
+        sed -i "s/^export ${key}=.*/export ${key}=${value}/" .env
+    elif grep -q "^${key}=" .env; then
+        sed -i "s/^${key}=.*/${key}=${value}/" .env
+    else
+        printf "export %s=%s\n" "$key" "$value" >> .env
     fi
-done
+}
 
-buffer_fine_range=()
-for b in $((OPTIMAL_BUFFER / 2)) "$OPTIMAL_BUFFER" $((OPTIMAL_BUFFER * 2)); do
-    if [ "$b" -ge 4096 ] && [ "$b" -le 1048576 ]; then
-        buffer_fine_range+=($b)
-    fi
-done
+bench_once_us() {
+    local raw
+    raw=$({ /usr/bin/time -p ./main "$TARGET" "$NEEDLE" >/dev/null; } 2>&1)
+    local sec
+    sec=$(printf '%s\n' "$raw" | awk '/^real / {print $2}')
+    awk -v s="$sec" 'BEGIN { printf "%.0f\n", s*1000000 }'
+}
 
-for threads in "${thread_fine_range[@]}"; do
-    for buf in "${buffer_fine_range[@]}"; do
-        sed -i "s/NUM_THREADS=.*/NUM_THREADS=$threads/" .env
-        sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$buf/" .env
+run_case() {
+    local threads="$1"
+    local chunk_bytes="$2"
+    set_env "NUM_THREADS" "$threads"
+    set_env "CHUNKING_THRESHOLD" "${chunk_bytes}"
+    LAST_US=$(bench_once_us)
+    printf "%-9d | %-8s | %.4fs\n" "$threads" "$((chunk_bytes / 1024))KB" "$(awk -v u="$LAST_US" 'BEGIN {print u/1000000}')"
+}
 
-        printf "%-12d | %-12s | " "$threads" "$(($buf/1024))KB"
+echo "--------------------------------------"
+printf "%-9s | %-8s | %s\n" "Threads" "Chunk" "Time"
 
-        TIME=$( { time ./main "$TARGET" "$NEEDLE" > /dev/null 2>&1; } 2>&1 \
-            | grep real | sed -E 's/.*[[:space:]]([0-9]+)m([0-9.]+)s/\1 \2/' \
-            | awk '{ printf "%.0f\n", ($1*60+$2)*1000000 }' )
+BEST_US=0
+BEST_THREADS=1
+BEST_CHUNK=65536
 
-        if [ "$TIME" -lt "$LOW_TIME" ]; then
-            LOW_TIME=$TIME
-            OPTIMAL_THREADS=$threads
-            OPTIMAL_BUFFER=$buf
+THREAD_MAX=$(nproc)
+CHUNK_VALUES=(65536 262144 1048576 4194304)
+
+# Note: after a certain point, adding more threads (or changing chunk size) will often stop improving the
+# wall-clock time because you're saturating disk I/O and/or CPU. At that stage, small differences you see
+# between nearby settings are frequently dominated by OS scheduling, filesystem cache state, CPU frequency
+# scaling, and background activity rather than the algorithm itself.
+
+for threads in $(seq 1 "$THREAD_MAX"); do
+    echo "--------------------------------------"
+    for chunk in "${CHUNK_VALUES[@]}"; do
+        run_case "$threads" "$chunk"
+        us="$LAST_US"
+        if [[ "$BEST_US" -eq 0 || "$us" -lt "$BEST_US" ]]; then
+            BEST_US="$us"
+            BEST_THREADS="$threads"
+            BEST_CHUNK="$chunk"
         fi
-
-        printf "%ss\n" "$(awk -v us="$TIME" 'BEGIN{ printf "%.3f", us/1000000 }')"
     done
 done
 
-echo "[+] Adaptive sweep complete."
+set_env "NUM_THREADS" "$BEST_THREADS"
+set_env "CHUNKING_THRESHOLD" "$BEST_CHUNK"
 
-printf "Best time: %ss\n" "$(awk -v us="$LOW_TIME" 'BEGIN{ printf "%.6f", us/1000000 }')"
-printf "Optimal threads: %d\n" "$OPTIMAL_THREADS"
-printf "Optimal buffer: %dKB\n" "$(($OPTIMAL_BUFFER/1024))"
-
-sed -i "s/NUM_THREADS=.*/NUM_THREADS=$OPTIMAL_THREADS/" .env
-sed -i "s/BUFFER_SIZE=.*/BUFFER_SIZE=$OPTIMAL_BUFFER/" .env
-echo "[+] Done. Best results usually occur with Threads matching CPU cores and 64KB-1MB buffers."
-echo "[+] Don't set thread count too high for small dirs since it adds overhead."
+echo "--------------------------------------"
+printf "Best time: %.6fs\n" "$(awk -v u="$BEST_US" 'BEGIN {print u/1000000}')"
+printf "Optimal threads: %d\n" "$BEST_THREADS"
+printf "Optimal CHUNKING_THRESHOLD: %dKB\n" "$((BEST_CHUNK / 1024))"
+echo "[+] Benchmark complete."

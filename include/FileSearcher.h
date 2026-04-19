@@ -37,7 +37,8 @@ public:
      * @param len Number of bytes to search in this task.
      * @param overlap Number of bytes to overlap with the next chunk.
      */
-    std::vector<SearchResult> searchRange(int fd, size_t file_size, size_t start, size_t len, size_t overlap) const;
+    std::vector<SearchResult> searchRange(int fd, size_t file_size, size_t start, size_t len, size_t overlap,
+                                          const std::string& filepath) const;
 
     const std::string& getNeedle() const { return engine_.getNeedle(); }
     bool logging_enabled() const { return config_.logging_enabled; }
