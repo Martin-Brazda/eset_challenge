@@ -7,35 +7,32 @@
 #include <iostream>
 #include <cstring>
 #include <filesystem>
+#include <CLIParser.h>
 
 int main(int argc, char* argv[]) {
-    if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <filepath> <string>\n";
-        return 1;
+    Config config;
+    CLIParser parser;
+    if (!parser.parse(argc, argv)) {
+        return parser.help_requested ? 0 : 1;
     }
 
-    if (!std::filesystem::exists(argv[1])) {
+    if (!std::filesystem::exists(parser.filepath)) {
         std::cerr << "Path does not exist\n";
         return 1;
     }
 
-    if (strlen(argv[2]) > 128) {
-        std::cerr << "String is too long (max 128 chars)\n";
-        return 1;
-    }
-    if (strlen(argv[2]) == 0) {
-        std::cerr << "String is empty\n";
-        return 1;
-    }
-
-    std::string path_str = argv[1];
-    std::string needle = argv[2];
+    std::string path_str = parser.filepath;
+    std::string needle = parser.needle;
     
-    Config config;
-    config.load_env(".env");
+    config.load_env(parser.env_path.value_or(".env"));
 
-    if (config.num_threads == 0) {
-        config.num_threads = 1;
+    if (parser.threads.has_value()) {
+        config.num_threads = parser.threads.value();
+    }
+
+    if (config.num_threads <= 0) {
+        std::cerr << "Number of threads must be a positive integer\n";
+        return 1;
     }
 
     ThreadPool pool(config.num_threads, config.queue_max_size);

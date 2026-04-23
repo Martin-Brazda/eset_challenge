@@ -1,12 +1,13 @@
-#include "DirectoryWalker.h"
-#include "ThreadPool.h"
+#include <DirectoryWalker.h>
+#include <ThreadPool.h>
 #include <filesystem>
 #include <iostream>
-#include <memory>
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <cctype>
 #include <cstdio>
+#include <memory>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -14,15 +15,32 @@
 namespace fs = std::filesystem;
 
 namespace {
-struct FileDescriptor {
+struct SharedFileDescriptor {
     int fd;
-    explicit FileDescriptor(int f) : fd(f) {}
-    ~FileDescriptor() { if (fd != -1) close(fd); }
+    std::atomic<size_t> pending_chunks;
+    explicit SharedFileDescriptor(int file_fd, size_t chunks) : fd(file_fd), pending_chunks(chunks) {}
 };
+}  // namespace
+
+DirectoryWalker::DirectoryWalker(const FileSearcher& fileSearcher, ThreadPool& pool)
+    : fileSearcher_(fileSearcher), pool_(pool),
+      max_open_large_fds_(std::max<size_t>(1, fileSearcher.getConfig().num_threads)) {}
+
+void DirectoryWalker::acquire_large_fd_slot() const {
+    std::unique_lock<std::mutex> lock(large_fd_mtx_);
+    large_fd_cv_.wait(lock, [this]() { return open_large_fds_ < max_open_large_fds_; });
+    ++open_large_fds_;
 }
 
-DirectoryWalker::DirectoryWalker(const FileSearcher& fileSearcher, ThreadPool& pool) 
-    : fileSearcher_(fileSearcher), pool_(pool) {}
+void DirectoryWalker::release_large_fd_slot() const {
+    {
+        std::lock_guard<std::mutex> lock(large_fd_mtx_);
+        if (open_large_fds_ > 0) {
+            --open_large_fds_;
+        }
+    }
+    large_fd_cv_.notify_one();
+}
 
 void DirectoryWalker::escape_needle(std::string& context) const {
     std::string escaped;
@@ -122,23 +140,39 @@ void DirectoryWalker::handle_file(const std::string& filepath, size_t file_size)
     const auto& config = fileSearcher_.getConfig();
 
     if (file_size > config.small_file_threshold) {
-        // Large file: Now we open it because we need the FD for parallel chunking
-        int fd = open(filepath.c_str(), O_RDONLY);
-        if (fd == -1) {
-            std::cerr << "Error opening file '" << filepath << "': " << std::strerror(errno) << std::endl;
+        // Large file: share one FD across chunk workers while bounding open-large-file FDs globally.
+        const size_t chunk_size = config.chunking_threshold;
+        const size_t overlap = fileSearcher_.getNeedle().size() > 0 ? fileSearcher_.getNeedle().size() - 1 : 0;
+        const size_t chunk_count = (file_size + chunk_size - 1) / chunk_size;
+        if (chunk_count == 0) {
             return;
         }
 
-        auto fd_ptr = std::make_shared<FileDescriptor>(fd);
-        const size_t chunk_size = config.chunking_threshold;
-        const size_t overlap = fileSearcher_.getNeedle().size() > 0 ? fileSearcher_.getNeedle().size() - 1 : 0;
+        acquire_large_fd_slot();
+        int fd = open(filepath.c_str(), O_RDONLY);
+        if (fd == -1) {
+            std::cerr << "Error opening file '" << filepath << "': " << std::strerror(errno) << std::endl;
+            release_large_fd_slot();
+            return;
+        }
 
-        for (size_t start = 0; start < file_size; start += chunk_size) {
-            size_t len = std::min(chunk_size, file_size - start);
-            size_t current_overlap = (start + len < file_size) ? overlap : 0;
-            pool_.submit([this, fd_ptr, file_size, start, len, current_overlap, filepath]() {
-                report_results(fileSearcher_.searchRange(fd_ptr->fd, file_size, start, len, current_overlap, filepath), filepath);
-            });
+        auto shared_fd = std::make_shared<SharedFileDescriptor>(fd, chunk_count);
+        try {
+            for (size_t start = 0; start < file_size; start += chunk_size) {
+                const size_t len = std::min(chunk_size, file_size - start);
+                const size_t current_overlap = (start + len < file_size) ? overlap : 0;
+                pool_.submit([this, shared_fd, file_size, start, len, current_overlap, filepath]() {
+                    report_results(fileSearcher_.searchRange(shared_fd->fd, file_size, start, len, current_overlap, filepath), filepath);
+                    if (shared_fd->pending_chunks.fetch_sub(1) == 1) {
+                        close(shared_fd->fd);
+                        release_large_fd_slot();
+                    }
+                });
+            }
+        } catch (...) {
+            close(shared_fd->fd);
+            release_large_fd_slot();
+            throw;
         }
     } else {
         // Small file: Add to batch without opening

@@ -1,6 +1,6 @@
 #pragma once
-#include "SearchEngine.h"
-#include "Config.h"
+#include <SearchEngine.h>
+#include <Config.h>
 #include <string>
 #include <vector>
 

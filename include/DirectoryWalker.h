@@ -1,9 +1,10 @@
 #pragma once
-#include "FileSearcher.h"
-#include "ThreadPool.h"
+#include <FileSearcher.h>
+#include <ThreadPool.h>
 #include <string>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
 
 struct FileInfo {
     std::string filepath;
@@ -39,6 +40,8 @@ private:
     void escape_needle(std::string& str) const;
     void report_results(const std::vector<SearchResult>& results, const std::string& filepath) const;
     void handle_file(const std::string& filepath, size_t file_size) const;
+    void acquire_large_fd_slot() const;
+    void release_large_fd_slot() const;
 
     const FileSearcher& fileSearcher_;
     ThreadPool& pool_;
@@ -46,4 +49,8 @@ private:
     mutable std::atomic<int> matches_{0};
     mutable std::mutex batch_mtx_;
     mutable std::vector<FileInfo> batch_buffer_;
+    mutable std::mutex large_fd_mtx_;
+    mutable std::condition_variable large_fd_cv_;
+    mutable size_t open_large_fds_{0};
+    size_t max_open_large_fds_{1};
 };
