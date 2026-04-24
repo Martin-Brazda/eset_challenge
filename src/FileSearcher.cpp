@@ -28,7 +28,7 @@ bool read_full_pread(int fd, char* buf, size_t count, off_t offset) {
         total += static_cast<size_t>(n);
     }
     return true;
-}
+} // namespace
 
 SearchResult make_from_buffer(const char* buf, size_t buf_len, size_t local_pos, size_t global_pos, size_t needle_len) {
     const size_t start_idx = local_pos < 3 ? 0 : local_pos - 3;

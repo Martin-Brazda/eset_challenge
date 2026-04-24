@@ -121,8 +121,8 @@ THREAD_MAX=$(nproc)
 CHUNK_VALUES=(65536 262144 1048576 4194304)
 
 # Note: after a certain point, adding more threads (or changing chunk size) will often stop improving the
-# wall-clock time because you're saturating disk I/O and/or CPU. At that stage, small differences you see
-# between nearby settings are frequently dominated by OS scheduling, filesystem cache state, CPU frequency
+# time because of saturating disk I/O and/or CPU. At that stage, small differences between nearby
+# settings are frequently dominated by OS scheduling, filesystem cache state, CPU frequency
 # scaling, and background activity rather than the algorithm itself.
 
 for threads in $(seq 1 "$THREAD_MAX"); do

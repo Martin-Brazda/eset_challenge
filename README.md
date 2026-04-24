@@ -212,9 +212,8 @@ The repository includes `benchmark.sh` for thread/chunk sweeps.
 ## Limitations / Current Trade-offs
 
 - output currently prints basename rather than full path
-- matching is byte-oriented (no UTF-aware grapheme semantics)
 - `MULTIFIND` returns non-overlapping matches by design
-- path traversal currently skips Linux pseudo-filesystem roots `/proc` and `/sys`
+- path traversal currently skips Linux pseudo-filesystem roots `/proc` and `/sys` by design
 
 ---
 
