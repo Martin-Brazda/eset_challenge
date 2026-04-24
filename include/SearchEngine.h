@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <optional>
 
 /**
  * @brief Core searching logic using Boyer-Moore algorithm.
@@ -22,9 +23,9 @@ public:
      * @param buffer Pointer to the contiguous memory to search.
      * @param size Size of the buffer in bytes.
      * @param start First index to consider (for repeated scans).
-     * @return Offset of the match relative to @p buffer, or -1 if not found.
+     * @return Offset of the match relative to @p buffer, or std::nullopt if not found.
      */
-    long searchBuffer(const char* buffer, size_t size, size_t start = 0) const;
+    std::optional<size_t> searchBuffer(const char* buffer, size_t size, size_t start = 0) const;
     
     const std::string& getNeedle() const { return needle_; }
 

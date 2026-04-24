@@ -187,7 +187,7 @@ Observed performance is workload-dependent:
 - large files -> chunk size and storage throughput dominate
 - live paths (e.g. `/var`) change during scan, so repeated runs vary
 
-Compared to `grep`, this tool may be slower because it performs extra required work per match:
+Compared to `grep`, this tool may be slower (mostly when run singlethreaded) in some cases because it performs extra required work per match:
 
 - byte offsets
 - prefix/suffix extraction
@@ -218,20 +218,12 @@ The repository includes `benchmark.sh` for thread/chunk sweeps.
 
 ---
 
-## Possible Next Improvements
-
-- optional full-path output mode
-- optional early-stop mode (first hit per file or globally)
-- dynamic chunk sizing based on observed throughput
-- richer benchmark harness with CSV/JSON output
-- selective file filtering (extensions, include/exclude patterns)
-
----
 
 ## Quick Start
 
 ```bash
 make
-./main ./bench_data FIND_ME_NOW
+./benchmark.sh
+./main <filepath> <string>
 ```
 

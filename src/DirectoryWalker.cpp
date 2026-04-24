@@ -17,8 +17,8 @@ namespace fs = std::filesystem;
 namespace {
 struct SharedFileDescriptor {
     int fd;
-    std::atomic<size_t> pending_chunks;
-    explicit SharedFileDescriptor(int file_fd, size_t chunks) : fd(file_fd), pending_chunks(chunks) {}
+    std::atomic<size_t> pending_tasks;
+    explicit SharedFileDescriptor(int file_fd, size_t tasks) : fd(file_fd), pending_tasks(tasks) {}
 };
 }  // namespace
 
@@ -69,23 +69,48 @@ void DirectoryWalker::report_results(const std::vector<SearchResult>& results, c
     if (results.empty()) return;
 
     std::string filename = filepath.substr(filepath.find_last_of("/\\") + 1);
-    
-    std::lock_guard<std::mutex> lock(cout_mtx_);
+    std::string output;
+    output.reserve(results.size() * 48);
+    int local_matches = 0;
+
     for (const auto& result : results) {
         if (result.offset < 0) continue;
-        matches_++;
+        ++local_matches;
         std::string prefix = result.prefix;
         std::string suffix = result.suffix;
         escape_needle(prefix);
         escape_needle(suffix);
 
-        std::cout << filename << "(" << result.offset << "): " << prefix << "..." << suffix << std::endl;
+        /* filename is used due to the challenge requirement
+           logically, it should be filepath
+           
+        */
+
+        // output += filepath;
+        output += filename;
+        output += "(";
+        output += std::to_string(result.offset);
+        output += "): ";
+        output += prefix;
+        output += "...";
+        output += suffix;
+        output += '\n';
+    }
+
+    if (local_matches == 0) {
+        return;
+    }
+
+    matches_.fetch_add(local_matches, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(cout_mtx_);
+        std::cout << output;
     }
 }
 
-bool DirectoryWalker::walk(const std::string& startPath) const {
+void DirectoryWalker::walk(const std::string& startPath) const {
 #ifdef __linux__
-    if (startPath.find("/proc") == 0 || startPath.find("/sys") == 0) return false;
+    if (startPath.find("/proc") == 0 || startPath.find("/sys") == 0) return;
 #endif
     const fs::path path(startPath);
     std::error_code ec; 
@@ -93,20 +118,21 @@ bool DirectoryWalker::walk(const std::string& startPath) const {
     if (fs::is_regular_file(path, ec)) {
         if (ec) {
             std::cerr << "Error checking file '" << path.string() << "': " << ec.message() << std::endl;
-            return false;
+            return;
         }
         size_t size = fs::file_size(path, ec);
         if (ec) {
             std::cerr << "Error reading size for '" << path.string() << "': " << ec.message() << std::endl;
-            return false;
+            return;
         }
         if (size > 0) handle_file(path.string(), size);
+        return;
     }
     
     if (fs::is_directory(path, ec)) {
         if (ec) {
             std::cerr << "Error checking directory '" << path.string() << "': " << ec.message() << std::endl;
-            return false;
+            return;
         }
         try {
             for (const auto& entry : fs::directory_iterator(path, fs::directory_options::skip_permission_denied)) {
@@ -131,22 +157,27 @@ bool DirectoryWalker::walk(const std::string& startPath) const {
         } catch (const std::exception& ex) {
             std::cerr << "Error traversing '" << path.string() << "': " << ex.what() << std::endl;
         }
+        return;
     }
-    
-    return false;
+
+    std::cerr << "Error: Invalid path type '" << path.string() << "'" << std::endl;
 }
 
 void DirectoryWalker::handle_file(const std::string& filepath, size_t file_size) const {
     const auto& config = fileSearcher_.getConfig();
+    const size_t needle_len = fileSearcher_.getNeedle().size();
 
     if (file_size > config.small_file_threshold) {
         // Large file: share one FD across chunk workers while bounding open-large-file FDs globally.
         const size_t chunk_size = config.chunking_threshold;
-        const size_t overlap = fileSearcher_.getNeedle().size() > 0 ? fileSearcher_.getNeedle().size() - 1 : 0;
+        const size_t overlap = needle_len > 0 ? needle_len - 1 : 0;
         const size_t chunk_count = (file_size + chunk_size - 1) / chunk_size;
         if (chunk_count == 0) {
             return;
         }
+        const size_t worker_goal = std::max<size_t>(1, config.num_threads * 2);
+        const size_t chunks_per_task = std::max<size_t>(1, (chunk_count + worker_goal - 1) / worker_goal);
+        const size_t task_count = (chunk_count + chunks_per_task - 1) / chunks_per_task;
 
         acquire_large_fd_slot();
         int fd = open(filepath.c_str(), O_RDONLY);
@@ -156,14 +187,21 @@ void DirectoryWalker::handle_file(const std::string& filepath, size_t file_size)
             return;
         }
 
-        auto shared_fd = std::make_shared<SharedFileDescriptor>(fd, chunk_count);
+        auto shared_fd = std::make_shared<SharedFileDescriptor>(fd, task_count);
         try {
-            for (size_t start = 0; start < file_size; start += chunk_size) {
-                const size_t len = std::min(chunk_size, file_size - start);
-                const size_t current_overlap = (start + len < file_size) ? overlap : 0;
-                pool_.submit([this, shared_fd, file_size, start, len, current_overlap, filepath]() {
-                    report_results(fileSearcher_.searchRange(shared_fd->fd, file_size, start, len, current_overlap, filepath), filepath);
-                    if (shared_fd->pending_chunks.fetch_sub(1) == 1) {
+            for (size_t first_chunk = 0; first_chunk < chunk_count; first_chunk += chunks_per_task) {
+                const size_t last_chunk = std::min(chunk_count, first_chunk + chunks_per_task);
+                pool_.submit([this, shared_fd, file_size, chunk_size, overlap, first_chunk, last_chunk, filepath]() {
+                    for (size_t chunk_index = first_chunk; chunk_index < last_chunk; ++chunk_index) {
+                        const size_t start = chunk_index * chunk_size;
+                        const size_t len = std::min(chunk_size, file_size - start);
+                        const size_t current_overlap = (start + len < file_size) ? overlap : 0;
+                        report_results(
+                            fileSearcher_.searchRange(shared_fd->fd, file_size, start, len, current_overlap, filepath),
+                            filepath
+                        );
+                    }
+                    if (shared_fd->pending_tasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
                         close(shared_fd->fd);
                         release_large_fd_slot();
                     }

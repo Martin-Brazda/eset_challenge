@@ -1,7 +1,12 @@
 #pragma once
 #include <string>
-#include <optional>
 #include <Config.h>
+
+enum class ParseResult {
+    Ok,
+    Help,
+    Error,
+};
 
 /**
  * @brief Command-line argument parser for the application.
@@ -10,19 +15,14 @@ class CLIParser {
 public:
     std::string filepath;
     std::string needle;
-    
-    // Optional flags
-    bool help_requested = false;
-    std::optional<int> threads;
-    std::optional<std::string> env_path;
 
     /**
      * @brief Parses command-line arguments and loads the configuration.
      * @param argc Argument count.
      * @param argv Argument vector.
-     * @return True if parsing succeeded and execution should continue, false otherwise.
+     * @return ParseResult::Ok if parsing succeeded and execution should continue.
      */
-    bool parse(int argc, char* argv[]);
+    ParseResult parse(int argc, char* argv[]);
     
     /**
      * @brief Prints the usage information.

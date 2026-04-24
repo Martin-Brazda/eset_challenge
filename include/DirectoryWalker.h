@@ -26,9 +26,8 @@ public:
     /**
      * @brief Recursively walks a path and queues files for searching.
      * @param startPath Absolute or relative path to a file or directory.
-     * @return False (the match count is tracked via an atomic internally).
      */
-    bool walk(const std::string& startPath) const;
+    void walk(const std::string& startPath) const;
     
     /** @brief Flushes the batch buffer to the ThreadPool. */
     void flush_batch() const;

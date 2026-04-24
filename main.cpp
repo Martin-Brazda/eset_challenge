@@ -12,8 +12,12 @@
 int main(int argc, char* argv[]) {
     Config config;
     CLIParser parser;
-    if (!parser.parse(argc, argv)) {
-        return parser.help_requested ? 0 : 1;
+    ParseResult result = parser.parse(argc, argv);
+    if (result == ParseResult::Help) {
+        return 0;
+    }
+    if (result == ParseResult::Error) {
+        return 1;
     }
 
     if (!std::filesystem::exists(parser.filepath)) {
@@ -24,11 +28,7 @@ int main(int argc, char* argv[]) {
     std::string path_str = parser.filepath;
     std::string needle = parser.needle;
     
-    config.load_env(parser.env_path.value_or(".env"));
-
-    if (parser.threads.has_value()) {
-        config.num_threads = parser.threads.value();
-    }
+    config.load_env(".env");
 
     if (config.num_threads <= 0) {
         std::cerr << "Number of threads must be a positive integer\n";
